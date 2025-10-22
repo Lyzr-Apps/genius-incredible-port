@@ -27,6 +27,7 @@ interface FeedbackRequest {
   formLinks: { email: string; link: string; status: string; reviewerName: string }[]
   feedback?: any
   responses: FeedbackSubmission[]
+  auditLog: AuditLogEntry[]
 }
 
 interface FeedbackSubmission {
@@ -47,11 +48,91 @@ interface FeedbackSubmission {
     cultural_fit: string
     team_management: string
   }
+  sentiment?: string
+}
+
+interface AuditLogEntry {
+  timestamp: string
+  action: string
+  details: string
+  actor: string
 }
 
 interface CriterionScore {
   score: number
   feedback: string
+}
+
+// Utility: Weighted Scoring Model
+const CRITERION_WEIGHTS = {
+  leadership_vision: 0.25,
+  communication_influence: 0.20,
+  experience_expertise: 0.20,
+  cultural_fit: 0.15,
+  team_management: 0.20,
+}
+
+function calculateWeightedScore(scores: Record<string, number>): number {
+  let weightedSum = 0
+  Object.entries(scores).forEach(([criterion, score]) => {
+    const weight = CRITERION_WEIGHTS[criterion as keyof typeof CRITERION_WEIGHTS] || 0
+    weightedSum += score * weight
+  })
+  return weightedSum
+}
+
+// Utility: Sentiment Analysis
+function analyzeSentiment(text: string): string {
+  const lowerText = text.toLowerCase()
+  const positiveWords = ['excellent', 'outstanding', 'strong', 'exceptional', 'impressive', 'great', 'effective', 'excellent']
+  const negativeWords = ['weak', 'poor', 'lacking', 'concerning', 'struggle', 'difficult', 'challenge', 'issue']
+
+  let positiveCount = 0
+  let negativeCount = 0
+
+  positiveWords.forEach(word => {
+    positiveCount += (lowerText.match(new RegExp(word, 'g')) || []).length
+  })
+
+  negativeWords.forEach(word => {
+    negativeCount += (lowerText.match(new RegExp(word, 'g')) || []).length
+  })
+
+  if (positiveCount > negativeCount * 1.5) return 'Positive'
+  if (negativeCount > positiveCount * 1.5) return 'Negative'
+  return 'Neutral'
+}
+
+// Utility: Add Audit Log Entry
+function addAuditLog(
+  request: FeedbackRequest,
+  action: string,
+  details: string,
+  actor: string = 'System'
+): FeedbackRequest {
+  return {
+    ...request,
+    auditLog: [
+      ...request.auditLog,
+      {
+        timestamp: new Date().toISOString(),
+        action,
+        details,
+        actor,
+      },
+    ],
+  }
+}
+
+// Utility: Mock Gmail Simulation
+async function simulateGmailSend(reviewerEmail: string, candidateName: string, formLink: string): Promise<boolean> {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      console.log(`📧 Email sent to ${reviewerEmail} for ${candidateName}`)
+      console.log(`Form Link: ${formLink}`)
+      resolve(Math.random() > 0.05) // 95% success rate
+    }, 500)
+  })
 }
 
 // Main App
@@ -140,7 +221,7 @@ function App() {
         }
       })
 
-      const newRequest: FeedbackRequest = {
+      let newRequest: FeedbackRequest = {
         id: assessmentId,
         candidateName,
         candidateRole,
@@ -151,6 +232,38 @@ function App() {
         formLinks,
         feedback: feedbackData,
         responses: [],
+        auditLog: [],
+      }
+
+      // Add audit log for assessment creation
+      newRequest = addAuditLog(
+        newRequest,
+        'ASSESSMENT_CREATED',
+        `Assessment created for ${candidateName} (${candidateRole}) with ${reviewerList.length} reviewers`,
+        'HR_ADMIN'
+      )
+
+      // Simulate Gmail invitations
+      let successCount = 0
+      for (const reviewer of reviewerList) {
+        const sent = await simulateGmailSend(reviewer.email, candidateName, formLinks.find(l => l.email === reviewer.email)?.link || '')
+        if (sent) successCount++
+        newRequest = addAuditLog(
+          newRequest,
+          sent ? 'EMAIL_SENT' : 'EMAIL_FAILED',
+          `Invitation ${sent ? 'sent to' : 'failed for'} ${reviewer.email}`,
+          'EMAIL_SERVICE'
+        )
+      }
+
+      // Update feedback with email metrics
+      if (newRequest.feedback) {
+        newRequest.feedback.invitation_status = {
+          total_invited: reviewerList.length,
+          successfully_sent: successCount,
+          failed: reviewerList.length - successCount,
+          pending_responses: reviewerList.length,
+        }
       }
 
       setRequests([...requests, newRequest])
@@ -170,10 +283,31 @@ function App() {
 
     setLoading(true)
     try {
+      // Calculate sentiment for the submission
+      const allComments = Object.values(submission.textResponses).join(' ')
+      submission.sentiment = analyzeSentiment(allComments)
+
+      // Calculate weighted score for this submission
+      const submissionWeightedScore = calculateWeightedScore(submission.scores)
+
       // Add feedback response to the request
-      const updatedRequest = {
+      let updatedRequest = {
         ...selectedRequest,
         responses: [...selectedRequest.responses, submission],
+      }
+
+      // Add audit log for submission
+      updatedRequest = addAuditLog(
+        updatedRequest,
+        'FEEDBACK_SUBMITTED',
+        `Feedback submitted by ${submission.reviewerName} with weighted score ${submissionWeightedScore.toFixed(2)}/5`,
+        submission.reviewerEmail
+      )
+
+      // Update pending responses count
+      const pendingCount = updatedRequest.reviewerEmails.length - updatedRequest.responses.length
+      if (updatedRequest.feedback?.invitation_status) {
+        updatedRequest.feedback.invitation_status.pending_responses = pendingCount
       }
 
       setRequests(
@@ -185,10 +319,12 @@ function App() {
       setFeedbackReviewerId('')
       setFeedbackReviewerEmail('')
 
-      // Notify agent about new response
+      // Notify agent about new response with weighted score
       const message = `New feedback received for ${updatedRequest.candidateName}:
       Reviewer: ${submission.reviewerName} (${submission.reviewerEmail})
-      Scores: ${JSON.stringify(submission.scores)}`
+      Weighted Score: ${submissionWeightedScore.toFixed(2)}/5
+      Sentiment: ${submission.sentiment}
+      Criterion Scores: ${JSON.stringify(submission.scores)}`
       await callAIAgent(message, '68f90a3671c6b27d6c8e8b5b')
     } catch (err: any) {
       setError(err.message || 'Failed to submit feedback')
@@ -485,10 +621,11 @@ function DashboardSection({
       <div className="lg:col-span-2">
         {selectedRequest ? (
           <Tabs defaultValue="summary" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="summary">Summary</TabsTrigger>
               <TabsTrigger value="responses">Responses</TabsTrigger>
               <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="audit">Audit Log</TabsTrigger>
             </TabsList>
 
             {/* Summary Tab */}
@@ -516,6 +653,11 @@ function DashboardSection({
                 onExportPDF={onExportPDF}
                 loading={loading}
               />
+            </TabsContent>
+
+            {/* Audit Log Tab */}
+            <TabsContent value="audit">
+              <AuditLogView auditLog={selectedRequest.auditLog} />
             </TabsContent>
           </Tabs>
         ) : (
@@ -653,39 +795,88 @@ function ResponsesView({ feedback }: { feedback: any }) {
 
   return (
     <div className="space-y-4">
-      {responses.map((response: any, idx: number) => (
-        <Card key={idx} className="border-0 shadow-lg">
-          <CardHeader className="pb-3">
-            <div className="flex justify-between items-start">
-              <div>
-                <CardTitle className="text-base font-light">{response.reviewer_name}</CardTitle>
-                <p className="text-xs text-slate-500">{response.reviewer_email}</p>
-              </div>
-              <Badge variant="secondary" className="text-xs">
-                {response.submission_timestamp
-                  ? new Date(response.submission_timestamp).toLocaleDateString()
-                  : 'No date'}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {Object.entries(response.scores || {}).map(([criterion, score]: any) => (
-                <div key={criterion}>
-                  <div className="flex justify-between mb-2">
-                    <p className="text-sm font-medium text-slate-700">
-                      {criterion.replace(/_/g, ' ').toUpperCase()}
-                    </p>
-                    <Badge className="bg-blue-100 text-blue-700">{score}/5</Badge>
-                  </div>
-                  <Progress value={(score / 5) * 100} className="h-1.5" />
+      {responses.map((response: any, idx: number) => {
+        const sentiment = response.sentiment || 'Neutral'
+        const sentimentColor = sentiment === 'Positive' ? 'bg-green-100 text-green-700' :
+                              sentiment === 'Negative' ? 'bg-red-100 text-red-700' :
+                              'bg-slate-100 text-slate-700'
+        return (
+          <Card key={idx} className="border-0 shadow-lg">
+            <CardHeader className="pb-3">
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle className="text-base font-light">{response.reviewer_name}</CardTitle>
+                  <p className="text-xs text-slate-500">{response.reviewer_email}</p>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+                <div className="flex gap-2">
+                  <Badge className={sentimentColor}>{sentiment}</Badge>
+                  <Badge variant="secondary" className="text-xs">
+                    {response.submission_timestamp
+                      ? new Date(response.submission_timestamp).toLocaleDateString()
+                      : 'No date'}
+                  </Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {Object.entries(response.scores || {}).map(([criterion, score]: any) => (
+                  <div key={criterion}>
+                    <div className="flex justify-between mb-2">
+                      <p className="text-sm font-medium text-slate-700">
+                        {criterion.replace(/_/g, ' ').toUpperCase()}
+                      </p>
+                      <Badge className="bg-blue-100 text-blue-700">{score}/5</Badge>
+                    </div>
+                    <Progress value={(score / 5) * 100} className="h-1.5" />
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })}
     </div>
+  )
+}
+
+// Audit Log View Component
+function AuditLogView({ auditLog }: { auditLog: AuditLogEntry[] }) {
+  if (auditLog.length === 0) {
+    return (
+      <Card className="border-0 shadow-lg p-8 text-center">
+        <p className="text-slate-500">No audit log entries yet</p>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="border-0 shadow-lg">
+      <CardHeader>
+        <CardTitle className="text-lg font-light">Compliance & Audit Trail</CardTitle>
+        <CardDescription>All interactions and activities logged</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ScrollArea className="h-96">
+          <div className="space-y-2 pr-4">
+            {[...auditLog].reverse().map((entry, idx) => (
+              <div key={idx} className="p-3 bg-slate-50 rounded border border-slate-200 text-sm">
+                <div className="flex justify-between mb-1">
+                  <p className="font-medium text-slate-900">
+                    <Badge variant="outline" className="text-xs mr-2">{entry.action}</Badge>
+                    {entry.actor}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {new Date(entry.timestamp).toLocaleString()}
+                  </p>
+                </div>
+                <p className="text-slate-700">{entry.details}</p>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -863,47 +1054,78 @@ function getRecommendationColor(recommendation: string): string {
 
 function generatePDFContent(request: FeedbackRequest): string {
   const feedback = request.feedback?.feedback_summary || {}
-  const content = `
-FEEDBACK ASSESSMENT REPORT
-==========================
 
-Candidate: ${request.candidateName}
+  const auditTrail = request.auditLog.map(log =>
+    `${log.timestamp} | ${log.action} | ${log.actor} | ${log.details}`
+  ).reverse().join('\n')
+
+  const content = `
+═══════════════════════════════════════════════════════════════════════════════
+  360° FEEDBACK ASSESSMENT REPORT - EXECUTIVE SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+CANDIDATE INFORMATION
+═════════════════════
+Name: ${request.candidateName}
 Position: ${request.candidateRole}
 Assessment Date: ${new Date(request.createdAt).toLocaleDateString()}
+Assessment ID: ${request.id}
 
-OVERALL SCORE
-=============
+OVERALL ASSESSMENT RESULTS
+══════════════════════════
 Overall Score: ${((feedback.overall_score || 0) * 20).toFixed(0)}%
 Total Responses: ${feedback.total_responses || 0}
-Completion: ${feedback.completion_percentage || 0}%
+Response Completion: ${feedback.completion_percentage || 0}%
+Weighted Score: ${feedback.overall_score ? (feedback.overall_score * 5).toFixed(2) : 'N/A'}/5
 
-RECOMMENDATION
-==============
+HIRING RECOMMENDATION
+═════════════════════
 Recommendation: ${feedback.recommendation}
-Rationale: ${feedback.recommendation_rationale}
 
-KEY STRENGTHS
-=============
-${(feedback.key_strengths || []).map((s: string) => `• ${s}`).join('\n')}
+Rationale:
+${feedback.recommendation_rationale}
 
-KEY CONCERNS
-============
+KEY ASSESSMENT HIGHLIGHTS
+═════════════════════════
+
+STRENGTHS
+─────────
+${(feedback.key_strengths || []).map((s: string) => `✓ ${s}`).join('\n')}
+
+AREAS FOR DEVELOPMENT
+─────────────────────
 ${(feedback.key_concerns || []).map((c: string) => `• ${c}`).join('\n')}
 
-CRITERION BREAKDOWN
-===================
+CRITERION BREAKDOWN WITH WEIGHTED SCORES
+════════════════════════════════════════
 ${Object.entries(feedback.criterion_breakdown || {})
-  .map(([key, data]: any) => `${key}: ${data.score}/5 - ${data.feedback}`)
-  .join('\n')}
+  .map(([key, data]: any) => {
+    const weight = CRITERION_WEIGHTS[key as keyof typeof CRITERION_WEIGHTS] || 0
+    return `${key.toUpperCase().replace(/_/g, ' ')}
+  Score: ${data.score}/5 | Weight: ${(weight * 100).toFixed(0)}% | Feedback: ${data.feedback}`
+  })
+  .join('\n\n')}
 
-CONSENSUS AREAS
-===============
-Strong Agreement: ${feedback.consensus_areas?.strong_agreement}
-Areas of Disagreement: ${feedback.consensus_areas?.areas_of_disagreement}
+CONSENSUS & FEEDBACK ANALYSIS
+══════════════════════════════
+Strong Agreement Areas:
+${feedback.consensus_areas?.strong_agreement}
+
+Areas of Disagreement:
+${feedback.consensus_areas?.areas_of_disagreement}
 
 EXECUTIVE SUMMARY
-=================
+════════════════════════════════════════════════════════════════════════════════
 ${feedback.executive_summary}
+
+COMPLIANCE & AUDIT TRAIL
+════════════════════════════════════════════════════════════════════════════════
+${auditTrail}
+
+═══════════════════════════════════════════════════════════════════════════════
+Report Generated: ${new Date().toLocaleString()}
+System: 360° Feedback Collection & Analysis Platform
+═══════════════════════════════════════════════════════════════════════════════
   `.trim()
 
   return content
