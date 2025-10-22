@@ -125,7 +125,7 @@ function App() {
 
       // Generate shareable feedback form links
       const formLinks = reviewerList.map(r => {
-        const reviewerId = Buffer.from(`${r.email}-${assessmentId}`).toString('base64')
+        const reviewerId = btoa(`${r.email}-${assessmentId}`)
         return {
           email: r.email,
           reviewerName: r.name,
