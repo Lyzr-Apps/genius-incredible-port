@@ -11,7 +11,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { CheckCircle2, AlertCircle, Send, Mail, BarChart3, Download, Loader2, Eye, RotateCcw, Trash2 } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Send, Mail, BarChart3, Download, Loader2, Eye, RotateCcw, Trash2, ArrowLeft, Copy } from 'lucide-react'
 import parseLLMJson from '@/utils/jsonParser'
 import { callAIAgent } from '@/utils/aiAgent'
 
@@ -21,10 +21,32 @@ interface FeedbackRequest {
   candidateName: string
   candidateRole: string
   reviewerEmails: string[]
+  reviewerNames: string[]
   status: 'draft' | 'sent' | 'completed'
   createdAt: string
-  formLinks: { email: string; link: string; status: string }[]
+  formLinks: { email: string; link: string; status: string; reviewerName: string }[]
   feedback?: any
+  responses: FeedbackSubmission[]
+}
+
+interface FeedbackSubmission {
+  reviewerEmail: string
+  reviewerName: string
+  submissionTimestamp: string
+  scores: {
+    leadership_vision: number
+    communication_influence: number
+    experience_expertise: number
+    cultural_fit: number
+    team_management: number
+  }
+  textResponses: {
+    leadership_vision: string
+    communication_influence: string
+    experience_expertise: string
+    cultural_fit: string
+    team_management: string
+  }
 }
 
 interface CriterionScore {
@@ -34,39 +56,64 @@ interface CriterionScore {
 
 // Main App
 function App() {
-  const [currentView, setCurrentView] = useState<'input' | 'dashboard'>('input')
+  const [currentView, setCurrentView] = useState<'input' | 'dashboard' | 'feedback'>('input')
   const [requests, setRequests] = useState<FeedbackRequest[]>([])
   const [selectedRequest, setSelectedRequest] = useState<FeedbackRequest | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
+  const [feedbackReviewerEmail, setFeedbackReviewerEmail] = useState('')
+  const [feedbackReviewerId, setFeedbackReviewerId] = useState('')
+
+  // Parse URL params for feedback form
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const reviewerId = params.get('reviewerId')
+    const email = params.get('email')
+    const assessmentId = params.get('assessmentId')
+
+    if (reviewerId && email && assessmentId) {
+      setFeedbackReviewerId(reviewerId)
+      setFeedbackReviewerEmail(email)
+      const request = requests.find(r => r.id === assessmentId)
+      if (request) {
+        setSelectedRequest(request)
+        setCurrentView('feedback')
+      }
+    }
+  }, [requests])
 
   // Handle form submission
-  const handleSubmit = async (candidateName: string, candidateRole: string, reviewerEmails: string) => {
+  const handleSubmit = async (candidateName: string, candidateRole: string, reviewerData: string) => {
     setError('')
     setSuccessMessage('')
 
-    if (!candidateName.trim() || !candidateRole.trim() || !reviewerEmails.trim()) {
+    if (!candidateName.trim() || !candidateRole.trim() || !reviewerData.trim()) {
       setError('Please fill in all fields')
       return
     }
 
-    const emailList = reviewerEmails
+    // Parse reviewer data (format: "Name|email@example.com" per line)
+    const reviewerList = reviewerData
       .split('\n')
-      .map(e => e.trim())
-      .filter(e => e && e.includes('@'))
+      .map(line => {
+        const [name, email] = line.split('|').map(s => s.trim())
+        return { name: name || '', email }
+      })
+      .filter(r => r.email && r.email.includes('@'))
 
-    if (emailList.length === 0) {
-      setError('Please enter at least one valid email address')
+    if (reviewerList.length === 0) {
+      setError('Please enter at least one valid reviewer with email')
       return
     }
 
     setLoading(true)
     try {
+      const emailList = reviewerList.map(r => r.email).join(', ')
       const message = `Please process feedback collection for:
       - Candidate Name: ${candidateName}
       - Candidate Role: ${candidateRole}
-      - Reviewer Emails: ${emailList.join(', ')}
+      - Reviewer Emails: ${emailList}
 
       Generate unique feedback form links for each reviewer and send invitations. Then track responses and provide analysis.`
 
@@ -74,24 +121,71 @@ function App() {
       const data = parseLLMJson(response.response, {})
 
       const feedbackData = data.result || data
+      const assessmentId = Date.now().toString()
+
+      // Generate shareable feedback form links
+      const formLinks = reviewerList.map(r => {
+        const reviewerId = Buffer.from(`${r.email}-${assessmentId}`).toString('base64')
+        return {
+          email: r.email,
+          reviewerName: r.name,
+          link: `${window.location.origin}?reviewerId=${reviewerId}&email=${r.email}&assessmentId=${assessmentId}`,
+          status: 'sent'
+        }
+      })
 
       const newRequest: FeedbackRequest = {
-        id: Date.now().toString(),
+        id: assessmentId,
         candidateName,
         candidateRole,
-        reviewerEmails: emailList,
+        reviewerEmails: reviewerList.map(r => r.email),
+        reviewerNames: reviewerList.map(r => r.name),
         status: 'sent',
         createdAt: new Date().toISOString(),
-        formLinks: feedbackData.form_links || [],
+        formLinks,
         feedback: feedbackData,
+        responses: [],
       }
 
       setRequests([...requests, newRequest])
       setSelectedRequest(newRequest)
-      setSuccessMessage('Feedback collection initiated successfully!')
+      setSuccessMessage('Assessment created! Share the feedback form links with reviewers.')
       setCurrentView('dashboard')
     } catch (err: any) {
       setError(err.message || 'Failed to process request')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handle feedback submission
+  const handleFeedbackSubmit = async (submission: FeedbackSubmission) => {
+    if (!selectedRequest) return
+
+    setLoading(true)
+    try {
+      // Add feedback response to the request
+      const updatedRequest = {
+        ...selectedRequest,
+        responses: [...selectedRequest.responses, submission],
+      }
+
+      setRequests(
+        requests.map(r => (r.id === selectedRequest.id ? updatedRequest : r))
+      )
+      setSelectedRequest(updatedRequest)
+      setSuccessMessage('Thank you! Your feedback has been submitted.')
+      setCurrentView('input')
+      setFeedbackReviewerId('')
+      setFeedbackReviewerEmail('')
+
+      // Notify agent about new response
+      const message = `New feedback received for ${updatedRequest.candidateName}:
+      Reviewer: ${submission.reviewerName} (${submission.reviewerEmail})
+      Scores: ${JSON.stringify(submission.scores)}`
+      await callAIAgent(message, '68f90a3671c6b27d6c8e8b5b')
+    } catch (err: any) {
+      setError(err.message || 'Failed to submit feedback')
     } finally {
       setLoading(false)
     }
@@ -139,24 +233,36 @@ function App() {
             <h1 className="text-3xl font-light text-slate-900">360° Feedback</h1>
             <p className="text-sm text-slate-500">Intelligent candidate evaluation</p>
           </div>
-          <div className="flex gap-2">
+          {currentView !== 'feedback' && (
+            <div className="flex gap-2">
+              <Button
+                variant={currentView === 'input' ? 'default' : 'outline'}
+                onClick={() => setCurrentView('input')}
+                className="gap-2"
+              >
+                <Mail className="w-4 h-4" />
+                New Assessment
+              </Button>
+              <Button
+                variant={currentView === 'dashboard' ? 'default' : 'outline'}
+                onClick={() => setCurrentView('dashboard')}
+                className="gap-2"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Dashboard
+              </Button>
+            </div>
+          )}
+          {currentView === 'feedback' && (
             <Button
-              variant={currentView === 'input' ? 'default' : 'outline'}
+              variant="outline"
               onClick={() => setCurrentView('input')}
               className="gap-2"
             >
-              <Mail className="w-4 h-4" />
-              New Assessment
+              <ArrowLeft className="w-4 h-4" />
+              Back
             </Button>
-            <Button
-              variant={currentView === 'dashboard' ? 'default' : 'outline'}
-              onClick={() => setCurrentView('dashboard')}
-              className="gap-2"
-            >
-              <BarChart3 className="w-4 h-4" />
-              Dashboard
-            </Button>
-          </div>
+          )}
         </div>
       </header>
 
@@ -181,6 +287,15 @@ function App() {
             loading={loading}
           />
         )}
+
+        {currentView === 'feedback' && selectedRequest && (
+          <FeedbackFormView
+            request={selectedRequest}
+            reviewerEmail={feedbackReviewerEmail}
+            onSubmit={handleFeedbackSubmit}
+            loading={loading}
+          />
+        )}
       </main>
     </div>
   )
@@ -188,7 +303,7 @@ function App() {
 
 // Input Section Component
 interface InputSectionProps {
-  onSubmit: (candidateName: string, candidateRole: string, reviewerEmails: string) => Promise<void>
+  onSubmit: (candidateName: string, candidateRole: string, reviewerData: string) => Promise<void>
   loading: boolean
   error: string
 }
@@ -196,11 +311,11 @@ interface InputSectionProps {
 function InputSection({ onSubmit, loading, error }: InputSectionProps) {
   const [candidateName, setCandidateName] = useState('')
   const [candidateRole, setCandidateRole] = useState('')
-  const [reviewerEmails, setReviewerEmails] = useState('')
+  const [reviewerData, setReviewerData] = useState('')
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    await onSubmit(candidateName, candidateRole, reviewerEmails)
+    await onSubmit(candidateName, candidateRole, reviewerData)
   }
 
   return (
@@ -209,7 +324,7 @@ function InputSection({ onSubmit, loading, error }: InputSectionProps) {
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-light">Create Feedback Assessment</CardTitle>
           <CardDescription>
-            Enter candidate details and reviewer emails to initiate the feedback collection process
+            Enter candidate details and reviewer information to initiate the feedback collection process
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -241,12 +356,12 @@ function InputSection({ onSubmit, loading, error }: InputSectionProps) {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Reviewer Emails</label>
-              <p className="text-xs text-slate-500">One email per line</p>
+              <label className="text-sm font-medium text-slate-700">Reviewers</label>
+              <p className="text-xs text-slate-500">Format: Name | email@example.com (one per line)</p>
               <Textarea
-                placeholder="john.doe@company.com&#10;jane.smith@company.com&#10;mike.wilson@company.com"
-                value={reviewerEmails}
-                onChange={e => setReviewerEmails(e.target.value)}
+                placeholder="John Doe | john.doe@company.com&#10;Jane Smith | jane.smith@company.com&#10;Mike Wilson | mike.wilson@company.com"
+                value={reviewerData}
+                onChange={e => setReviewerData(e.target.value)}
                 className="text-base min-h-32 resize-none"
               />
             </div>
@@ -604,17 +719,28 @@ function DetailsView({ request, onResendInvitations, onExportPDF, loading }: Det
 
           {/* Form Links */}
           <div className="mt-6">
-            <p className="text-sm font-medium text-slate-900 mb-3">Feedback Form Links</p>
+            <p className="text-sm font-medium text-slate-900 mb-3">Shareable Feedback Form Links</p>
             <ScrollArea className="h-64">
-              <div className="space-y-2 pr-4">
+              <div className="space-y-3 pr-4">
                 {(request.formLinks || []).map((link, idx) => (
-                  <div key={idx} className="p-2 bg-slate-50 rounded text-xs">
-                    <p className="font-medium text-slate-900">{link.reviewer_email}</p>
-                    <div className="flex gap-2 mt-1">
-                      <code className="text-slate-600 break-all flex-1">
-                        {link.unique_form_link ? link.unique_form_link.substring(0, 50) + '...' : 'Link pending'}
+                  <div key={idx} className="p-3 bg-slate-50 rounded border border-slate-200">
+                    <p className="font-medium text-slate-900 text-sm">{link.reviewerName || link.email}</p>
+                    <p className="text-xs text-slate-500 mb-2">{link.email}</p>
+                    <div className="flex gap-2 items-center">
+                      <code className="text-slate-600 break-all flex-1 text-xs bg-white p-2 rounded border border-slate-200">
+                        {link.link ? link.link.substring(0, 60) + '...' : 'Link pending'}
                       </code>
-                      <Badge variant="outline" className="text-xs">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          navigator.clipboard.writeText(link.link)
+                        }}
+                        className="flex-shrink-0"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                      <Badge variant="outline" className="text-xs flex-shrink-0">
                         {link.status}
                       </Badge>
                     </div>
@@ -712,6 +838,141 @@ ${feedback.executive_summary}
   `.trim()
 
   return content
+}
+
+// Feedback Form View Component
+interface FeedbackFormViewProps {
+  request: FeedbackRequest
+  reviewerEmail: string
+  onSubmit: (submission: FeedbackSubmission) => Promise<void>
+  loading: boolean
+}
+
+function FeedbackFormView({ request, reviewerEmail, onSubmit, loading }: FeedbackFormViewProps) {
+  const [scores, setScores] = useState({
+    leadership_vision: 3,
+    communication_influence: 3,
+    experience_expertise: 3,
+    cultural_fit: 3,
+    team_management: 3,
+  })
+  const [textResponses, setTextResponses] = useState({
+    leadership_vision: '',
+    communication_influence: '',
+    experience_expertise: '',
+    cultural_fit: '',
+    team_management: '',
+  })
+
+  const criteria = [
+    { key: 'leadership_vision', label: 'Leadership & Vision', description: 'Ability to set direction and inspire teams' },
+    { key: 'communication_influence', label: 'Communication & Influence', description: 'Clarity in communication and ability to persuade' },
+    { key: 'experience_expertise', label: 'Experience & Expertise', description: 'Relevant skills and domain knowledge' },
+    { key: 'cultural_fit', label: 'Cultural Fit', description: 'Alignment with company values and culture' },
+    { key: 'team_management', label: 'Team Management', description: 'Ability to lead and develop teams' },
+  ]
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    const submission: FeedbackSubmission = {
+      reviewerEmail,
+      reviewerName: request.reviewerNames[request.reviewerEmails.indexOf(reviewerEmail)] || reviewerEmail,
+      submissionTimestamp: new Date().toISOString(),
+      scores: scores as any,
+      textResponses: textResponses as any,
+    }
+
+    await onSubmit(submission)
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto">
+      <Card className="border-0 shadow-lg mb-6">
+        <CardHeader className="bg-gradient-to-r from-indigo-50 to-blue-50">
+          <CardTitle className="text-2xl font-light">{request.candidateName}</CardTitle>
+          <CardDescription className="text-base">
+            {request.candidateRole} - 360° Feedback Form
+          </CardDescription>
+          <p className="text-sm text-slate-600 mt-2">
+            Evaluator: <span className="font-medium">{reviewerEmail}</span>
+          </p>
+        </CardHeader>
+      </Card>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {criteria.map((criterion) => (
+          <Card key={criterion.key} className="border-0 shadow-lg">
+            <CardHeader className="pb-3">
+              <div>
+                <CardTitle className="text-lg font-light">{criterion.label}</CardTitle>
+                <CardDescription className="text-sm">{criterion.description}</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-sm font-medium text-slate-700">Score (1-5)</label>
+                  <Badge className="bg-indigo-100 text-indigo-700 text-base px-3 py-1">
+                    {scores[criterion.key as keyof typeof scores]}/5
+                  </Badge>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  value={scores[criterion.key as keyof typeof scores]}
+                  onChange={e => setScores({
+                    ...scores,
+                    [criterion.key]: parseInt(e.target.value)
+                  })}
+                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                />
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Poor</span>
+                  <span>Average</span>
+                  <span>Excellent</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700">Comments</label>
+                <Textarea
+                  placeholder="Please provide specific examples and observations..."
+                  value={textResponses[criterion.key as keyof typeof textResponses]}
+                  onChange={e => setTextResponses({
+                    ...textResponses,
+                    [criterion.key]: e.target.value
+                  })}
+                  className="min-h-24 resize-none text-sm"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+
+        <div className="flex gap-3 pt-4">
+          <Button
+            type="submit"
+            disabled={loading}
+            className="flex-1 h-12 bg-indigo-600 hover:bg-indigo-700 gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4" />
+                Submit Feedback
+              </>
+            )}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
 }
 
 export default App
