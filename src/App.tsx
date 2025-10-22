@@ -672,9 +672,10 @@ interface DetailsViewProps {
   onResendInvitations: () => void
   onExportPDF: () => void
   loading: boolean
+  onOpenFeedbackForm?: (email: string) => void
 }
 
-function DetailsView({ request, onResendInvitations, onExportPDF, loading }: DetailsViewProps) {
+function DetailsView({ request, onResendInvitations, onExportPDF, loading, onOpenFeedbackForm }: DetailsViewProps) {
   const invitationStatus = request.feedback?.invitation_status || {
     total_invited: request.reviewerEmails.length,
     successfully_sent: 0,
@@ -682,8 +683,33 @@ function DetailsView({ request, onResendInvitations, onExportPDF, loading }: Det
     pending_responses: request.reviewerEmails.length,
   }
 
+  const [showCopyNotification, setShowCopyNotification] = useState(false)
+
+  const handleCopyLink = (link: string) => {
+    navigator.clipboard.writeText(link)
+    setShowCopyNotification(true)
+    setTimeout(() => setShowCopyNotification(false), 2000)
+  }
+
   return (
     <div className="space-y-6">
+      {/* Share Information */}
+      <Alert className="border-indigo-200 bg-indigo-50">
+        <Mail className="h-4 w-4 text-indigo-600" />
+        <AlertDescription className="text-indigo-900">
+          Share the feedback form links below with reviewers. Each link is unique and pre-fills their email address.
+        </AlertDescription>
+      </Alert>
+
+      {showCopyNotification && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800">
+            Link copied to clipboard!
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Invitation Status */}
       <Card className="border-0 shadow-lg">
         <CardHeader>
@@ -719,32 +745,52 @@ function DetailsView({ request, onResendInvitations, onExportPDF, loading }: Det
 
           {/* Form Links */}
           <div className="mt-6">
-            <p className="text-sm font-medium text-slate-900 mb-3">Shareable Feedback Form Links</p>
-            <ScrollArea className="h-64">
+            <p className="text-sm font-medium text-slate-900 mb-4">Shareable Feedback Form Links</p>
+            <ScrollArea className="h-96">
               <div className="space-y-3 pr-4">
                 {(request.formLinks || []).map((link, idx) => (
-                  <div key={idx} className="p-3 bg-slate-50 rounded border border-slate-200">
-                    <p className="font-medium text-slate-900 text-sm">{link.reviewerName || link.email}</p>
-                    <p className="text-xs text-slate-500 mb-2">{link.email}</p>
-                    <div className="flex gap-2 items-center">
-                      <code className="text-slate-600 break-all flex-1 text-xs bg-white p-2 rounded border border-slate-200">
-                        {link.link ? link.link.substring(0, 60) + '...' : 'Link pending'}
-                      </code>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          navigator.clipboard.writeText(link.link)
-                        }}
-                        className="flex-shrink-0"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </Button>
-                      <Badge variant="outline" className="text-xs flex-shrink-0">
-                        {link.status}
-                      </Badge>
-                    </div>
-                  </div>
+                  <Card key={idx} className="border-0 shadow-sm bg-gradient-to-r from-slate-50 to-indigo-50">
+                    <CardContent className="pt-4">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-semibold text-slate-900">{link.reviewerName || link.email}</p>
+                            <p className="text-xs text-slate-500">{link.email}</p>
+                          </div>
+                          <Badge className="bg-indigo-100 text-indigo-700">{link.status}</Badge>
+                        </div>
+
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-slate-600">Feedback Form Link:</p>
+                          <div className="flex gap-2 items-stretch">
+                            <code className="text-slate-600 break-all flex-1 text-xs bg-white p-2 rounded border border-slate-300 font-mono overflow-hidden">
+                              {link.link}
+                            </code>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleCopyLink(link.link)}
+                              className="flex-shrink-0 gap-1"
+                              title="Copy link to clipboard"
+                            >
+                              <Copy className="w-4 h-4" />
+                              Copy
+                            </Button>
+                          </div>
+                        </div>
+
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => window.open(link.link, '_blank')}
+                          className="w-full gap-2 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-100"
+                        >
+                          <Eye className="w-4 h-4" />
+                          Test Feedback Form
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
             </ScrollArea>
