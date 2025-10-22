@@ -35,9 +35,6 @@ interface CriterionScore {
 // Main App
 function App() {
   const [currentView, setCurrentView] = useState<'input' | 'dashboard'>('input')
-  const [candidateName, setCandidateName] = useState('')
-  const [candidateRole, setCandidateRole] = useState('')
-  const [reviewerEmails, setReviewerEmails] = useState('')
   const [requests, setRequests] = useState<FeedbackRequest[]>([])
   const [selectedRequest, setSelectedRequest] = useState<FeedbackRequest | null>(null)
   const [loading, setLoading] = useState(false)
@@ -45,8 +42,7 @@ function App() {
   const [successMessage, setSuccessMessage] = useState('')
 
   // Handle form submission
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSubmit = async (candidateName: string, candidateRole: string, reviewerEmails: string) => {
     setError('')
     setSuccessMessage('')
 
@@ -92,9 +88,6 @@ function App() {
 
       setRequests([...requests, newRequest])
       setSelectedRequest(newRequest)
-      setCandidateName('')
-      setCandidateRole('')
-      setReviewerEmails('')
       setSuccessMessage('Feedback collection initiated successfully!')
       setCurrentView('dashboard')
     } catch (err: any) {
@@ -176,14 +169,7 @@ function App() {
           </Alert>
         )}
 
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertCircle className="w-4 h-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {currentView === 'input' && <InputSection onSubmit={handleSubmit} loading={loading} />}
+        {currentView === 'input' && <InputSection onSubmit={handleSubmit} loading={loading} error={error} />}
 
         {currentView === 'dashboard' && (
           <DashboardSection
@@ -202,14 +188,20 @@ function App() {
 
 // Input Section Component
 interface InputSectionProps {
-  onSubmit: (e: React.FormEvent) => Promise<void>
+  onSubmit: (candidateName: string, candidateRole: string, reviewerEmails: string) => Promise<void>
   loading: boolean
+  error: string
 }
 
-function InputSection({ onSubmit, loading }: InputSectionProps) {
+function InputSection({ onSubmit, loading, error }: InputSectionProps) {
   const [candidateName, setCandidateName] = useState('')
   const [candidateRole, setCandidateRole] = useState('')
   const [reviewerEmails, setReviewerEmails] = useState('')
+
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await onSubmit(candidateName, candidateRole, reviewerEmails)
+  }
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -221,7 +213,13 @@ function InputSection({ onSubmit, loading }: InputSectionProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-6">
+          {error && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertCircle className="w-4 h-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <form onSubmit={handleFormSubmit} className="space-y-6">
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Candidate Name</label>
               <Input
