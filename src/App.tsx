@@ -83,6 +83,12 @@ function App() {
     }
   }, [requests])
 
+  // Handle assessment selection from feedback access screen
+  const handleSelectAssessmentForFeedback = (assessment: FeedbackRequest, email: string) => {
+    setSelectedRequest(assessment)
+    setFeedbackReviewerEmail(email)
+  }
+
   // Handle form submission
   const handleSubmit = async (candidateName: string, candidateRole: string, reviewerData: string) => {
     setError('')
@@ -244,6 +250,14 @@ function App() {
                 New Assessment
               </Button>
               <Button
+                variant="outline"
+                onClick={() => setCurrentView('feedback')}
+                className="gap-2 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+              >
+                <Send className="w-4 h-4" />
+                Give Feedback
+              </Button>
+              <Button
                 variant={currentView === 'dashboard' ? 'default' : 'outline'}
                 onClick={() => setCurrentView('dashboard')}
                 className="gap-2"
@@ -288,13 +302,22 @@ function App() {
           />
         )}
 
-        {currentView === 'feedback' && selectedRequest && (
-          <FeedbackFormView
-            request={selectedRequest}
-            reviewerEmail={feedbackReviewerEmail}
-            onSubmit={handleFeedbackSubmit}
-            loading={loading}
-          />
+        {currentView === 'feedback' && (
+          selectedRequest ? (
+            <FeedbackFormView
+              request={selectedRequest}
+              reviewerEmail={feedbackReviewerEmail}
+              onSubmit={handleFeedbackSubmit}
+              loading={loading}
+            />
+          ) : (
+            <FeedbackAccessSection
+              assessments={requests}
+              onSelectAssessment={(request, email) => {
+                handleSelectAssessmentForFeedback(request, email)
+              }}
+            />
+          )
         )}
       </main>
     </div>
@@ -884,6 +907,95 @@ ${feedback.executive_summary}
   `.trim()
 
   return content
+}
+
+// Feedback Access Section Component
+interface FeedbackAccessSectionProps {
+  assessments: FeedbackRequest[]
+  onSelectAssessment: (request: FeedbackRequest, email: string) => void
+}
+
+function FeedbackAccessSection({ assessments, onSelectAssessment }: FeedbackAccessSectionProps) {
+  const [emailsByAssessment, setEmailsByAssessment] = useState<{ [key: string]: string }>({})
+
+  if (assessments.length === 0) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <Card className="border-0 shadow-lg">
+          <CardHeader>
+            <CardTitle className="text-2xl font-light">Provide Feedback</CardTitle>
+            <CardDescription>
+              No assessments available at the moment
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-slate-600">
+              Ask your HR administrator for a feedback form link, or contact them to create a new assessment.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <Card className="border-0 shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-2xl font-light">Provide Feedback</CardTitle>
+          <CardDescription>
+            Select a candidate to provide your 360° feedback
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3">
+            {assessments.map(assessment => {
+              const email = emailsByAssessment[assessment.id] || ''
+              return (
+                <Card key={assessment.id} className="border-0 shadow-sm hover:shadow-md transition-shadow">
+                  <CardContent className="pt-4">
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-lg font-semibold text-slate-900">
+                          {assessment.candidateName}
+                        </p>
+                        <p className="text-sm text-slate-600">
+                          {assessment.candidateRole}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-slate-700">Your Email</label>
+                        <Input
+                          type="email"
+                          placeholder="your.email@company.com"
+                          value={email}
+                          onChange={e => setEmailsByAssessment({
+                            ...emailsByAssessment,
+                            [assessment.id]: e.target.value
+                          })}
+                          className="text-sm"
+                        />
+                      </div>
+
+                      <Button
+                        onClick={() => onSelectAssessment(assessment, email)}
+                        disabled={!email.includes('@')}
+                        className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700"
+                      >
+                        <Send className="w-4 h-4" />
+                        Provide Feedback
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
 
 // Feedback Form View Component
